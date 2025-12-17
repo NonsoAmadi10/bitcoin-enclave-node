@@ -155,3 +155,116 @@ The `expected_measurement` variable is the key to ensuring the integrity of your
 | `instance_id`          | The ID of the EC2 instance hosting the enclave.                                           |
 | `instance_public_ip`   | Public IP address of the EC2 instance.                                                    |
 | `enclave_measurement`  | The expected PCR0 measurement of the enclave image that the system will verify against.   |
+
+## 6. Future Improvements
+
+This reference implementation provides a strong foundation. However, to make it truly production-ready, several areas could be improved and hardened:
+
+*   **Full KMS Integration:** The current KMS integration is a placeholder. A full implementation would involve the parent application passing only encrypted ciphertext to the enclave, with the enclave being the only entity capable of calling `kms:Decrypt` after successful attestation.
+
+*   **Robust Communication Protocol:** The current communication between the parent and enclave is a simple echo service. This could be developed into a more robust API using a standard like JSON-RPC over VSOCK to handle specific commands (e.g., `sign_transaction`, `get_public_key`).
+
+*   **CI/CD for EIF Builds:** For maximum security and reproducibility, the Enclave Image File (EIF) should be built in a trusted CI/CD pipeline, not on the host at boot time. The resulting EIF and its PCR0 measurement should be stored in a secure registry (like ECR), and the EC2 instance should pull this pre-verified artifact.
+
+*   **Enhanced Logging and Monitoring:** The parent application could be configured to emit structured (JSON) logs to CloudWatch Logs. Custom metrics (e.g., `attestation_failures`, `signing_operations_per_second`) could also be published to CloudWatch to provide better observability into the health and security of the system.
+
+*   **Host and Network Hardening:** The host environment could be further secured by using a minimal, hardened OS (like Bottlerocket) and by restricting security group egress rules to only the essential endpoints (e.g., AWS KMS).
+
+## 7. Contributing
+
+Contributions are welcome! This project is intended as a learning tool and a foundation for more complex systems. If you have ideas for improvements or find a bug, please feel free to:
+
+1.  **Open an Issue:** Discuss the change you would like to make.
+2.  **Submit a Pull Request:** Fork the repository, make your changes, and open a pull request for review.
+
+Please make sure to update tests as appropriate and ensure the CI pipeline passes.
+
+## 8. CI/CD with OIDC
+
+This project includes a GitHub Actions workflow (`.github/workflows/ci.yml`) that automates testing. To securely run Terraform commands that interact with your AWS account (like `terraform plan`), the workflow uses OIDC (OpenID Connect) to authenticate with AWS without needing long-lived secrets.
+
+### How it Works
+1.  GitHub provides a temporary OIDC token to the workflow runner.
+2.  The workflow assumes an IAM Role in your AWS account.
+3.  The IAM Role's trust policy is configured to only grant access to your specific GitHub repository.
+4.  AWS verifies the OIDC token and provides the workflow with short-lived AWS credentials.
+5.  The workflow uses these credentials to run `terraform plan`.
+
+### How to Set Up OIDC
+
+#### Step 1: Add the OIDC Provider in your AWS Account (Manual)
+
+This is a one-time setup in your AWS account.
+
+1.  Navigate to **IAM** in the AWS Console.
+2.  Go to **Identity providers** and click **Add provider**.
+3.  Select **OpenID Connect**.
+4.  For the **Provider URL**, enter `https://token.actions.githubusercontent.com`.
+5.  For the **Audience**, enter `sts.amazonaws.com`.
+6.  Click **Get thumbprint** to verify the server certificate.
+7.  Click **Add provider**.
+
+#### Step 2: Create the IAM Role for GitHub Actions (Terraform)
+
+Add the following Terraform code to a file in your root deployment project (e.g., you can create `oidc.tf` alongside your `main.tf`). **Do not add this inside the module.**
+
+Replace `your-github-username/your-repo-name` with your actual GitHub repository path.
+
+```terraform
+data "aws_iam_policy_document" "github_actions_trust_policy" {
+  statement {
+    actions = ["sts:AssumeRoleWithWebIdentity"]
+    effect  = "Allow"
+
+    principals {
+      type        = "Federated"
+      identifiers = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:oidc-provider/token.actions.githubusercontent.com"]
+    }
+
+    # This condition scopes the role to your specific repository and main branch
+    condition {
+      test     = "StringLike"
+      variable = "token.actions.githubusercontent.com:sub"
+      values   = ["repo:your-github-username/your-repo-name:ref:refs/heads/main"]
+    }
+  }
+}
+
+resource "aws_iam_role" "github_actions_role" {
+  name               = "github-actions-role"
+  assume_role_policy = data.aws_iam_policy_document.github_actions_trust_policy.json
+
+  # This policy should be scoped down to the minimum required permissions
+  # for your CI/CD pipeline. For a terraform plan, it needs read access.
+  inline_policy {
+    name = "terraform-plan-policy"
+    policy = jsonencode({
+      Version   = "2012-10-17",
+      Statement = [
+        {
+          Effect   = "Allow",
+          Action   = "sts:GetCallerIdentity",
+          Resource = "*"
+        },
+        # Add other read-only permissions needed for terraform plan
+      ]
+    })
+  }
+}
+
+data "aws_caller_identity" "current" {}
+
+output "github_actions_role_arn" {
+  description = "The ARN of the IAM role for GitHub Actions OIDC."
+  value       = aws_iam_role.github_actions_role.arn
+}
+```
+
+#### Step 3: Update the GitHub Actions Workflow
+
+1.  Run `terraform apply` to create the `github_actions_role` and get its ARN from the output.
+2.  Open the `.github/workflows/ci.yml` file.
+3.  Find the `aws-actions/configure-aws-credentials` step.
+4.  Replace the placeholder `role-to-assume` ARN with the actual ARN of the role you just created.
+
+Your CI/CD pipeline is now configured to securely authenticate with AWS.

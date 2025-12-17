@@ -1,5 +1,5 @@
 resource "aws_iam_role" "enclave_ec2_role" {
-  name = "BitcoinEnclaveEC2Role"
+  name = "${var.name_prefix}-ec2-role"
   assume_role_policy = jsonencode({
     Version   = "2012-10-17",
     Statement = [
@@ -15,11 +15,11 @@ resource "aws_iam_role" "enclave_ec2_role" {
 }
 
 resource "aws_iam_policy" "enclave_policy" {
-  name        = "NitroEnclavesPolicy"
+  name        = "${var.name_prefix}-enclave-policy"
   description = "Policy for EC2 to manage Nitro Enclaves and SSM"
   policy = jsonencode({
     Version   = "2012-10-17",
-    Statement = [
+    Statement = concat([
       {
         Effect   = "Allow",
         Action   = "ec2:DescribeInstances",
@@ -43,7 +43,17 @@ resource "aws_iam_policy" "enclave_policy" {
         ],
         Resource = "*"
       }
-    ]
+    ],
+    var.kms_key_arn != null ? [
+      {
+        Effect   = "Allow",
+        Action   = [
+          "kms:Decrypt",
+          "kms:GenerateDataKey" # Potentially needed for re-encrypting or generating new keys
+        ],
+        Resource = var.kms_key_arn
+      }
+    ] : [])
   })
 }
 
@@ -53,6 +63,6 @@ resource "aws_iam_role_policy_attachment" "enclave_policy_attachment" {
 }
 
 resource "aws_iam_instance_profile" "enclave_instance_profile" {
-  name = "BitcoinEnclaveInstanceProfile"
+  name = "${var.name_prefix}-instance-profile"
   role = aws_iam_role.enclave_ec2_role.name
 }

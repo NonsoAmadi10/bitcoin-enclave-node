@@ -8,17 +8,21 @@ output "instance_public_ip" {
   value       = aws_instance.enclave_host.public_ip
 }
 
-output "attestation_document" {
-  description = "The cryptographic attestation document from the running enclave. (Placeholder - will be implemented with the enclave application)"
-  value       = "not-yet-implemented"
-}
+# The attestation document is generated at runtime by the enclave and verified by the parent application.
+# Terraform cannot directly output this dynamic value.
+# output "attestation_document" {
+#   description = "The cryptographic attestation document from the running enclave."
+#   value       = "generated-at-runtime" 
+# }
 
 output "enclave_measurement" {
-  description = "The PCR0 measurement of the running enclave image. (Placeholder - will be implemented with the enclave application)"
-  value       = "not-yet-implemented"
+  description = "The expected PCR0 measurement of the enclave image that the system will verify against."
+  value       = var.expected_measurement
 }
 
-output "endpoint" {
-  description = "The network endpoint for interacting with the enclave's proxy application. (Placeholder)"
-  value       = "not-yet-implemented"
-}
+# The endpoint for interacting with the enclave's parent application.
+# This will depend on the application's configuration (e.g., specific port, DNS).
+# output "endpoint" {
+#   description = "The network endpoint for interacting with the enclave's proxy application."
+#   value       = "configured-by-application"
+# }

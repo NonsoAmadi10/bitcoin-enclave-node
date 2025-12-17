@@ -1,19 +1,32 @@
 # This is an example of how to use the bitcoin-enclave-node module.
 
 provider "aws" {
-  region = "us-east-1" # Or your preferred region
+  region = "us-east-1" # Or your preferred region that supports Nitro Enclaves
 }
 
 module "enclave_node" {
   source = "../../modules/bitcoin-enclave-node"
 
   aws_region = "us-east-1"
-  # In a real scenario, you would restrict this to your IP
-  allowed_cidrs = ["0.0.0.0/0"] 
   
-  # These would be populated with the actual image details
-  # enclave_image_digest = "sha256:..." 
-  # expected_measurement = "..."
+  # IMPORTANT: Replace this with the URL of a public git repository that has the 
+  # same structure as the `enclave_app` in this project.
+  git_repository_url = "https://github.com/path-to-your/bitcoin-enclave-app.git"
+
+
+  
+  # --- Attestation and Integrity ---
+  #
+  # WORKFLOW FOR `expected_measurement`:
+  # 1. On your first deployment, leave this variable commented out or empty.
+  # 2. After the instance is created, the EIF will be built by the `user_data` script.
+  # 3. Check the EC2 instance's logs (e.g., via CloudWatch or SSH) for the line:
+  #    "Actual EIF PCR0 Measurement: <some_hash_value>"
+  # 4. Copy this hash value and paste it here for `expected_measurement`.
+  # 5. On all subsequent deployments, Terraform will ensure the `user_data` script 
+  #    verifies that the newly built EIF has this exact measurement. If it doesn't match,
+  #    the setup will fail, protecting against unintended changes to the enclave image.
+  expected_measurement = "your-eif-pcr0-measurement-hash-goes-here" # e.g., "9a8b..."
 }
 
 output "instance_id" {
@@ -26,7 +39,15 @@ output "instance_public_ip" {
   value       = module.enclave_node.instance_public_ip
 }
 
-output "attestation_document" {
-  description = "The cryptographic attestation document from the running enclave."
-  value       = module.enclave_node.attestation_document
+output "expected_enclave_measurement" {
+  description = "The expected PCR0 measurement of the enclave image that the system will verify against."
+  value       = module.enclave_node.enclave_measurement
+}
+
+# The attestation document is generated at runtime and verified by the parent application.
+# It is not directly accessible as a Terraform output.
+# You can view it in the EC2 instance logs if needed for debugging.
+output "attestation_document_info" {
+  description = "Attestation documents are generated and verified at runtime on the EC2 instance."
+  value       = "See EC2 instance logs for details."
 }

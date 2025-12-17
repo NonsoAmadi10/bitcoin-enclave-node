@@ -1,31 +1,42 @@
-# Bitcoin Enclave Node
+# Bitcoin Enclave Node: A Reference Implementation
 
-This project provides the Infrastructure as Code (IaC) to deploy a secure Bitcoin application node using confidential computing principles on AWS.
+This project provides an opinionated, security-first reference implementation for deploying secure Bitcoin infrastructure on AWS using confidential computing. It uses Terraform and AWS Nitro Enclaves to demonstrate how to build infrastructure that is confidential, verifiable, and reproducible.
 
-## 1. Problem Statement
+Think of this repository not as a generic "Bitcoin on AWS" module, but as **executable documentation** for deploying applications under adversarial assumptions.
 
-Deploying Bitcoin infrastructure, such as full nodes, Arkade nodes, or Application Specific Processors (ASPs), into standard cloud environments presents significant security challenges. In a typical deployment, sensitive data like cryptographic signing keys and proprietary execution logic are exposed to the underlying host operating system and, by extension, to the cloud provider.
+## 1. Architectural Philosophy
 
-This exposure leads to two primary weaknesses:
+This module is intentionally minimal to demonstrate a set of core infrastructure primitives.
 
-1.  **Lack of Confidentiality:** An administrator with access to the host machine, or the cloud provider's infrastructure, could potentially inspect the memory or storage of the running virtual machine, compromising sensitive keys and logic.
-2.  **Lack of Reproducibility & Integrity:** Standard, manual deployments are prone to configuration drift and make it difficult to prove that the running environment has not been tampered with.
+#### What This Module IS:
+*   **An Opinionated Reference:** It demonstrates a specific, secure-by-default approach to deploying sensitive workloads.
+*   **A Demonstration of Primitives:** It focuses on isolating execution, ensuring key confidentiality, enabling reproducible builds, and facilitating cryptographic attestation.
+*   **A Foundation:** It serves as a starting point that can be extended for more complex applications like Arkade nodes or Application Specific Processors (ASPs).
 
-This project aims to solve these problems by providing a secure, verifiable, and reproducible deployment model.
+#### What This Module IS NOT:
+*   **A Generic "Kitchen Sink" Module:** It avoids excessive toggles and configurations to maintain clarity and focus.
+*   **A Wrapper around EC2 + Docker:** The value is in the orchestration of Nitro Enclaves, the attestation flow, and the secure bootstrapping process.
+*   **A Full Application:** The included application is a simple "signing" service to demonstrate the architecture, not a production-ready Bitcoin application.
 
-## 2. Architectural Goals
+## 2. Threat Model
 
-Based on the problem statement, we have defined three core architectural tenets:
+The primary goal of this architecture is to protect against a compromised cloud environment, whether due to a malicious insider at the cloud provider or an attacker who has gained administrative access to the parent EC2 instance.
 
-1.  **Confidentiality:** Signing keys and sensitive business logic must be encrypted and isolated *while in use* (i.e., in memory). They must be inaccessible to the host OS and the cloud provider.
-2.  **Integrity:** We must be able to cryptographically verify that the code running in the secure environment is exactly the code we intended to run, without any modification.
-3.  **Reproducibility:** The entire infrastructure deployment must be defined in code to ensure predictable, repeatable, and auditable results.
+#### What This Architecture Protects Against:
+*   **Host OS Inspection:** An attacker with root access to the parent EC2 instance cannot inspect the memory or state of the running enclave.
+*   **Compromised Storage:** An attacker cannot tamper with the enclave application at rest, as its integrity is verified via a cryptographic hash (PCR0) before launch.
+*   **Lack of Confidentiality:** Sensitive data (e.g., signing keys) remains encrypted and isolated within the enclave's memory, inaccessible to the parent OS or the cloud provider.
+*   **Configuration Drift:** The entire infrastructure is defined as code, ensuring that deployments are reproducible and auditable.
 
-## 3. High-Level Architecture
+#### What This Architecture Does NOT Protect Against:
+*   **Application-Level Bugs:** A vulnerability within the enclave application code itself can still be exploited.
+*   **Side-Channel Attacks:** While Nitro Enclaves provide strong isolation, sophisticated side-channel attacks are a theoretical risk for any co-located compute environment.
+*   **Insecure Key Provisioning:** If the initial secret provisioning process is compromised (e.g., a weak KMS policy or a compromised CI/CD pipeline), the enclave can be provisioned with malicious data.
+*   **Denial of Service:** An attacker with control of the parent instance can terminate the enclave, leading to a denial of service.
 
-To achieve these goals, our architecture is centered around **AWS Nitro Enclaves**, managed via **Terraform** for Infrastructure as Code.
+## 3. Core Architecture
 
-The core concept is to partition the application. The untrusted, public-facing components run on a standard EC2 instance, while the highly sensitive, key-handling components run in a completely isolated enclave.
+The architecture partitions the application into two main components: a trusted **Enclave Application** that runs inside a Nitro Enclave, and an untrusted **Parent Application** that runs on the host EC2 instance.
 
 ```
 +-------------------------------------------------------------------+
@@ -36,10 +47,11 @@ The core concept is to partition the application. The untrusted, public-facing c
 |   |                                                           |   |
 |   |   +-----------------------+       (VSOCK)       +-----------------------+   |
 |   |   | Parent Application    |<====================>| Enclave Application   |   |
-|   |   | (Broker/Proxy)        |                     | (Bitcoin Signer)      |   |
+|   |   | (main.go)             |                     | (enclave/main.go)     |   |
 |   |   |                       |                     |                       |   |
-|   |   | Handles networking,   |                     | - Holds private keys  |   |
-|   |   | non-sensitive tasks.  |                     | - Performs signing    |   |
+|   |   | - Launches Enclave    |                     | - Holds private keys  |   |
+|   |   | - Verifies Attestation|                     | - Performs signing    |   |
+|   |   | - Manages Networking  |                     |                       |   |
 |   |   +-----------------------+                     +-----------------------+   |
 |   |                                                 | AWS Nitro Enclave     |   |
 |   |                                                 | (Isolated VM)         |   |
@@ -50,18 +62,96 @@ The core concept is to partition the application. The untrusted, public-facing c
 +-------------------------------------------------------------------+
 ```
 
-### Core Components
+### Core Components and Application Separation
 
-*   **Parent EC2 Instance:** A standard AWS Nitro-based EC2 instance that hosts the main application and the enclave.
-*   **AWS Nitro Enclave:** A hardened, minimalistic virtual machine created from the parent instance's CPU and memory resources. It has no persistent storage, no network access, no interactive access (SSH), and no access from the parent instance.
-*   **Enclave Application:** The sensitive part of our workload (e.g., the Bitcoin signing logic) runs exclusively inside the enclave.
-*   **Parent (Broker) Application:** A less sensitive application runs on the parent instance, handling external network requests and communicating with the enclave.
-*   **VSOCK:** A secure, point-to-point communication channel that allows the Parent Application to communicate with the Enclave Application. This is the only way in or out of the enclave.
-*   **Terraform:** We use Terraform to define and provision all AWS resources, including the EC2 instance, IAM roles for attestation, and security groups.
-*   **Docker:** The Enclave Application is built using a Dockerfile for a consistent environment. The resulting Docker image is then converted into an Enclave Image File (`.eif`) for deployment.
+This project utilizes two distinct Go applications, each named `main.go`, but located in different contexts and serving different purposes:
 
-### How This Architecture Solves the Problem
+*   **Parent Application (`enclave_app/src/main.go`):**
+    *   **Runs On:** The main EC2 instance (host).
+    *   **Role:** This is the orchestrator or "broker." It's responsible for managing the enclave's lifecycle (launching, monitoring, terminating), performing runtime attestation verification, handling external network requests, and securely communicating with the Enclave Application over VSOCK.
+*   **Enclave Application (`enclave_app/src/enclave/main.go`):**
+    *   **Runs In:** The isolated AWS Nitro Enclave.
+    *   **Role:** This is the secure, sensitive part of the workload. It performs critical operations (like cryptographic signing) that require strong isolation. It has no direct access to the network or persistent storage, communicating solely via VSOCK with the Parent Application. This is the code that gets packaged into the Enclave Image File (EIF) and whose integrity is cryptographically measured.
 
-*   **Confidentiality:** Keys inside the enclave are protected from the parent OS and AWS. The enclave's memory cannot be inspected.
-*   **Integrity:** The enclave provides a **cryptographic attestation document** containing measurements (hashes) of the software running within it. Our application can verify this document to prove the enclave's integrity before trusting it with sensitive data.
-*   **Reproducibility:** Terraform and Docker provide a complete, code-based definition of the entire system, from cloud resources to the application image, ensuring consistent and auditable deployments.
+This clear separation is fundamental to the security model of AWS Nitro Enclaves, ensuring that the most sensitive logic is executed in a highly protected environment.
+
+### Attestation and Bootstrapping Flow
+
+The process of launching and verifying the enclave is fully automated:
+
+1.  **Terraform Provisions Host:** Terraform creates the Nitro-enabled EC2 instance, IAM roles, and security groups.
+2.  **`user_data` Initializes Host:** On boot, the `user_data` script installs Go, Docker, the Nitro Enclaves CLI, and clones the application git repository.
+3.  **`setup_enclave.sh` Builds EIF and Parent App:** The `user_data` script then executes `setup_enclave.sh`, which:
+    *   Builds the Go parent application (`enclave_app/src/main.go`) into an executable binary.
+    *   Builds the Docker image for the enclave application (`enclave_app/src/enclave/main.go`).
+    *   Converts the image into an Enclave Image File (`.eif`).
+    *   **Verifies EIF Integrity:** It calculates the PCR0 measurement (a cryptographic hash) of the newly built `.eif` and compares it against the `expected_measurement` provided to Terraform. If they do not match, the script fails, preventing the enclave from starting.
+4.  **`systemd` Starts Parent App:** If the EIF is verified, `setup_enclave.sh` sets up and starts a `systemd` service for the parent application (the compiled Go binary).
+5.  **Parent App Launches Enclave:** The parent application (the compiled Go binary) then formally launches the enclave using `nitro-cli`.
+6.  **Runtime Attestation:** After launch, the parent application requests a signed **attestation document** from the running enclave. It verifies that the PCR0 measurement inside this document also matches the `expected_measurement`.
+7.  **Secret Provisioning (Optional):** Only after successful runtime attestation does the parent application proceed. If a `kms_key_arn` is provided, it can now use KMS to decrypt secrets and securely pass them to the enclave over the encrypted VSOCK channel.
+
+## 4. How to Use
+
+This module can be used by following the example provided in the `examples/minimal` directory.
+
+### Step 1: Configure the Example
+
+Navigate to `examples/minimal/main.tf` and configure the module block:
+
+```terraform
+module "enclave_node" {
+  source = "../../modules/bitcoin-enclave-node"
+
+  aws_region = "us-east-1"
+  
+  # Replace with a PUBLIC git repository containing your enclave_app
+  git_repository_url = "https://github.com/your-username/your-enclave-app-repo.git"
+
+  # WARNING: For production, you MUST restrict this to your IP address.
+  allowed_cidrs = ["0.0.0.0/0"] 
+  
+  # See the PCR0 Measurement Workflow below
+  expected_measurement = "your-eif-pcr0-measurement-hash-goes-here"
+}
+```
+
+### Step 2: The PCR0 Measurement Workflow
+
+The `expected_measurement` variable is the key to ensuring the integrity of your enclave. Here is the workflow to set it correctly:
+
+1.  **First Deployment (Leave Blank):** On your very first deployment, comment out or leave `expected_measurement` as an empty string.
+2.  **Apply Terraform:** Run `terraform init` and `terraform apply`. This will build the EC2 instance.
+3.  **Find the PCR0 Measurement:** The `user_data` script will build the `.eif` and calculate its PCR0 hash. You can find this value in the EC2 instance logs (either via the AWS Console's "Instance Settings -> Get instance screenshot" or by SSHing into the instance and checking the systemd logs for `enclave-broker.service`). Look for a line like this:
+    ```
+    Actual EIF PCR0 Measurement: 9a8b...
+    ```
+4.  **Update and Redeploy:** Copy this hash value and paste it into the `expected_measurement` variable in your `.tf` file.
+5.  **Subsequent Deployments:** From now on, every time Terraform runs, the `setup_enclave.sh` script will verify that the newly built EIF has this exact measurement. If it ever changes, the setup will fail, protecting you from running untrusted code.
+
+## 5. Module Inputs and Outputs
+
+### Inputs
+
+| Name                   | Description                                                                                         | Type          | Default       |
+| ---------------------- | --------------------------------------------------------------------------------------------------- | ------------- | ------------- |
+| `aws_region`           | The AWS region to deploy resources in.                                                              | `string`      | (required)    |
+| `name_prefix`          | A prefix used for all created resources to ensure unique names.                                     | `string`      | `"btc-enclave"` |
+| `git_repository_url`   | The URL of the git repository to clone onto the instance. Must contain the `enclave_app` directory.   | `string`      | (required)    |
+| `instance_type`        | The EC2 instance type for the enclave host. Must be Nitro Enclaves compatible.                        | `string`      | `"m5.xlarge"` |
+| `allowed_cidrs`        | A list of CIDR blocks to allow SSH access from.                                                     | `list(string)`| `["0.0.0.0/0"]` |
+| `expected_measurement` | The expected PCR0 measurement of the enclave image. Used for integrity verification.                | `string`      | `""`          |
+| `kms_key_arn`          | Optional: The ARN of the KMS key to use for secret unwrapping within the enclave.                     | `string`      | `null`        |
+| `log_sink`             | Optional: The destination for logs (e.g., CloudWatch Log Group ARN).                                | `string`      | `null`        |
+| `enclave_cpu_count`    | The number of vCPUs to allocate to the Nitro Enclave.                                               | `number`      | `1`           |
+| `enclave_memory_mib`   | The amount of memory (in MiB) to allocate to the Nitro Enclave.                                     | `number`      | `256`         |
+| `vpc_id`               | Optional: The ID of the VPC to deploy the host in. If not provided, the default VPC is used.          | `string`      | `null`        |
+| `subnet_id`            | Optional: The ID of the subnet to deploy the host in. If not provided, a default subnet is used.    | `string`      | `null`        |
+
+### Outputs
+
+| Name                   | Description                                                                               |
+| ---------------------- | ----------------------------------------------------------------------------------------- |
+| `instance_id`          | The ID of the EC2 instance hosting the enclave.                                           |
+| `instance_public_ip`   | Public IP address of the EC2 instance.                                                    |
+| `enclave_measurement`  | The expected PCR0 measurement of the enclave image that the system will verify against.   |

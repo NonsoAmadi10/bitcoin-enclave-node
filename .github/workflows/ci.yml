@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  test-terraform:
+    name: "Test Terraform"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: "1.2.0" # Choose a specific version
+
+      - name: Terraform Init
+        id: init
+        run: terraform -chdir=examples/minimal init
+
+      - name: Terraform Validate
+        id: validate
+        run: terraform validate -no-color
+
+      - name: TFLint
+        uses: terraform-linters/setup-tflint@v3
+        with:
+          tflint_version: v0.40.0
+
+      - name: Run TFLint
+        run: tflint --module --force
+        
+  test-go:
+    name: "Test Go"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+        
+      - name: Setup Go
+        uses: actions/setup-go@v3
+        with:
+          go-version: '1.18'
+
+      - name: Check Go formatting
+        run: |
+          if [ "$(gofmt -s -l . | wc -l)" -gt 0 ]; then
+            echo "Go files are not formatted. Please run 'gofmt -s -w .'"
+            exit 1
+          fi
+
+      - name: Go Vet
+        working-directory: ./enclave_app
+        run: go vet ./...
+        
+      - name: Go Test
+        working-directory: ./enclave_app
+        run: go test -v ./...

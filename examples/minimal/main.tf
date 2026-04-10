@@ -5,16 +5,19 @@ provider "aws" {
 }
 
 module "enclave_node" {
-  source = "../../modules/bitcoin-enclave-node"
+  source = "../.."
 
   aws_region = "us-east-1"
-  
+
   # IMPORTANT: Replace this with the URL of a public git repository that has the 
   # same structure as the `enclave_app` in this project.
   git_repository_url = "https://github.com/path-to-your/bitcoin-enclave-app.git"
 
+  # Restrict SSH ingress to trusted networks only.
+  allowed_cidrs = ["203.0.113.10/32"]
 
-  
+
+
   # --- Attestation and Integrity ---
   #
   # WORKFLOW FOR `expected_measurement`:

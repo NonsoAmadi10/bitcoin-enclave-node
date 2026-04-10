@@ -13,18 +13,20 @@ data "aws_ami" "amazon_linux_2" {
   }
 }
 
-data "aws_subnet" "default" {
-  vpc_id            = var.vpc_id == null ? data.aws_vpc.default.id : var.vpc_id
-  availability_zone = data.aws_ami.amazon_linux_2.architecture == "x86_64" ? "us-east-1a" : "us-east-1a" # Example, can be improved
+data "aws_subnets" "default_vpc_subnets" {
+  filter {
+    name   = "vpc-id"
+    values = [var.vpc_id == null ? data.aws_vpc.default.id : var.vpc_id]
+  }
 }
 
 resource "aws_instance" "enclave_host" {
-  ami                         = data.aws_ami.amazon_linux_2.id
-  instance_type               = var.instance_type
-  iam_instance_profile        = aws_iam_instance_profile.enclave_instance_profile.name
-  vpc_security_group_ids      = [aws_security_group.enclave_node_sg.id]
-  subnet_id                   = var.subnet_id == null ? data.aws_subnet.default.id : var.subnet_id
-  
+  ami                    = data.aws_ami.amazon_linux_2.id
+  instance_type          = var.instance_type
+  iam_instance_profile   = aws_iam_instance_profile.enclave_instance_profile.name
+  vpc_security_group_ids = [aws_security_group.enclave_node_sg.id]
+  subnet_id              = var.subnet_id == null ? data.aws_subnets.default_vpc_subnets.ids[0] : var.subnet_id
+
   enclave_options {
     enabled = true
   }

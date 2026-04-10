@@ -20,8 +20,6 @@ variable "instance_type" {
   default     = "m5.xlarge"
 }
 
-
-
 variable "enclave_image_digest" {
   description = "The digest of the enclave image to be deployed. Used for verification."
   type        = string
@@ -68,4 +66,15 @@ variable "subnet_id" {
   description = "The ID of the subnet to deploy the enclave host in. If not provided, a default subnet in the selected VPC will be used."
   type        = string
   default     = null
+}
+
+variable "allowed_cidrs" {
+  description = "CIDR blocks allowed to SSH to the host. Empty list disables SSH ingress."
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = alltrue([for cidr in var.allowed_cidrs : can(cidrnetmask(cidr))])
+    error_message = "Each value in allowed_cidrs must be a valid CIDR."
+  }
 }

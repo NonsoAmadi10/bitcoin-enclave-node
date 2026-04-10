@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"os"
 
 	"github.com/mdlayher/vsock"
 )
@@ -17,7 +16,7 @@ func main() {
 	log.Println("Enclave server starting...")
 
 	// Listen on the VSOCK port
-	l, err := vsock.Listen(vsockPort)
+	l, err := vsock.Listen(uint32(vsockPort), nil)
 	if err != nil {
 		log.Fatalf("failed to listen on vsock port %d: %v", vsockPort, err)
 	}

@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -36,8 +35,8 @@ func main() {
 	awsRegion := flag.String("aws-region", "", "AWS region for KMS operations (if KMS key is provided)")
 	flag.Parse()
 
-	if *eifPath == "" || *enclaveName == "" || *expectedMeasurement == "" {
-		log.Println("Missing required arguments: --eif-path, --enclave-name, --expected-measurement")
+	if *eifPath == "" || *enclaveName == "" {
+		log.Println("Missing required arguments: --eif-path, --enclave-name")
 		flag.Usage()
 		log.Fatalf("Exiting due to missing arguments.")
 	}
@@ -63,8 +62,12 @@ func main() {
 		log.Fatalf("Failed to retrieve attestation document: %v", err)
 	}
 
-	if !verifyAttestationDoc(attestationDoc, *expectedMeasurement) {
-		log.Fatalf("Attestation document verification failed.")
+	if *expectedMeasurement != "" {
+		if !verifyAttestationDoc(attestationDoc, *expectedMeasurement) {
+			log.Fatalf("Attestation document verification failed.")
+		}
+	} else {
+		log.Println("No expected measurement provided; skipping runtime PCR0 verification.")
 	}
 
 	// 3. (Optional) KMS Secret Unwrapping
@@ -158,15 +161,12 @@ func verifyAttestationDoc(doc *AttestationDoc, expectedPCR0 string) bool {
 
 func communicateWithEnclave(message string) (string, error) {
 	log.Printf("Connecting to enclave via VSOCK on port %d...", enclaveVsockPort)
-	
+
 	// The parent connects to CID 3, which is the default CID for the first enclave.
 	// This is a simplification for this example. A more robust solution would parse the CID from `nitro-cli run-enclave`.
 	const enclaveCID = 3
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	conn, err := vsock.Dial(ctx, enclaveCID, enclaveVsockPort, nil)
+	conn, err := vsock.Dial(uint32(enclaveCID), uint32(enclaveVsockPort), nil)
 	if err != nil {
 		return "", fmt.Errorf("failed to dial vsock: %v", err)
 	}
